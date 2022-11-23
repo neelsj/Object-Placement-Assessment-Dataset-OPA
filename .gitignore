@@ -1,6 +1,5 @@
 *.pth
 /src/.vs
 /src/__pycache__
-/src/experiments/ablation_study/resnet18_repeat3/logs
+/src/experiments/
 /src/dataset
-/src/experiments/ablation_study/resnet18_repeat2/logs

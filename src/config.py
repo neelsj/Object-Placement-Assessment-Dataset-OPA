@@ -15,7 +15,7 @@ class Config(object):
     ## 
     class_num = 2 
     img_size = 256
-    batch_size = 64
+    batch_size = 32
     num_workers = 4
     global_feature_size = 8
 
