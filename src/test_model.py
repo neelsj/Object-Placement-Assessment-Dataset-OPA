@@ -54,4 +54,4 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
 
 if __name__ == '__main__':
     device = "cuda:0"
-    f1, balanced_acc = evaluate_model(device, checkpoint_path='./best-acc.pth')
+    f1, balanced_acc = evaluate_model(device, checkpoint_path='experiments/ablation_study/resnet18_repeat3/checkpoints/best-acc.pth')

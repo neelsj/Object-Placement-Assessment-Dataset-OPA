@@ -150,7 +150,7 @@ class ResNet(nn.Module):
         return x
 
 
-def resnet(layers, pretrained=False, pretrained_weight=None, **kwargs):
+def resnet(layers, pretrained=False, pretrained_weight=None, without_mask=False, **kwargs):
     model = None
     if layers == 18:
         model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
@@ -164,7 +164,7 @@ def resnet(layers, pretrained=False, pretrained_weight=None, **kwargs):
         model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
     else:
         raise Exception('Unsupport resnet layers numbers: ', layers)
-    if opt.without_mask:
+    if (opt.without_mask or without_mask):
         if pretrained:
             model.load_state_dict(torch.load(pretrained_weight))
             print('loaded pretrained resnet{} from {}'.format(layers, pretrained_weight))
