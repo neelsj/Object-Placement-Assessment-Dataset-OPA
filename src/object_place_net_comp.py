@@ -151,7 +151,7 @@ class ObjectPlaceNetFBComposite(nn.Module):
     # rotation 0 to 1, centerx, centery 0 to 1, scale 0 to inf
     def affine_warp(self, img_cat, theta, centerx, centery, scale):
         
-        if (theta is not None):
+        if (theta):
             theta = theta*2*torch.pi
 
         centerx = centerx*2.-1.
@@ -160,20 +160,21 @@ class ObjectPlaceNetFBComposite(nn.Module):
         transx = -centerx
         transy = -centery
 
-        if (theta and theta.shape[0] == 1):
+        if (theta and theta and theta.shape[0] == 1):
             R = torch.tensor((torch.cos(theta),-torch.sin(theta),0,torch.sin(theta),torch.cos(theta),0,0,0,1)).reshape(3,3).float()
 
         Ms = []
 
         for b in range(img_cat.shape[0]):
 
-            if (theta is not None and theta.shape[0] == img_cat.shape[0]):
-                R = torch.tensor((torch.cos(theta[b]),-torch.sin(theta[b]),0,torch.sin(theta[b]),torch.cos(theta[b]),0,0,0,1)).reshape(3,3).float()
+            if (theta):
+               if(theta.shape[0] == img_cat.shape[0]):
+                    R = torch.tensor((torch.cos(theta[b]),-torch.sin(theta[b]),0,torch.sin(theta[b]),torch.cos(theta[b]),0,0,0,1)).reshape(3,3).float()
 
             T = torch.tensor((1,0,transx[b],0,1,transy[b],0,0,1)).reshape(3,3).float()
             S = torch.tensor((1./scale[b],0,0,0,1./scale[b],0,0,0,1)).reshape(3,3).float()
 
-            if (theta is not None):
+            if (theta):
                 M = torch.matmul(R,torch.matmul(S,T))
             else:
                 M = torch.matmul(S,T)
@@ -230,6 +231,8 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
 
     total = 0
     pred_labels = []
+    pred_fake = []
+    gts = []
     gts = []
 
     test_loader = get_test_dataloader()
@@ -263,13 +266,24 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
             else:
                 logits = net(img_cat)
 
+            probs = F.softmax(logits)
+            probs_fake = probs[:,0]
+
+            print(F.softmax(logits))
+            print(logits.max(1)[1].cpu().numpy())
+            print(label.cpu().numpy())
+
             pred_labels.extend(logits.max(1)[1].cpu().numpy())
             gts.extend(label.cpu().numpy())
+            pred_fake.extend(probs_fake.cpu().numpy())
             total += label.size(0)
 
+            break
+
+
     total_f1, total_bal_acc = F1(pred_labels, gts)
-    print("Baseline model evaluate on {} images, local:f1={:.4f},bal_acc={:.4f}".format(
-        total, total_f1, total_bal_acc))
+    print("Baseline model evaluate on {} images, local:f1={:.4f},bal_acc={:.4f},loss={:.4f}".format(
+        total, total_f1, total_bal_acc, sum(pred_fake)/total))
 
     return total_f1, total_bal_acc
 
