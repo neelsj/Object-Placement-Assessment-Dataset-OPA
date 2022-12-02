@@ -23,6 +23,7 @@ class ImageDatasetPlus(Dataset):
         self.labels = []
         self.images_path = []
         self.mask_path = []
+        self.scale = []  # foreground box
         self.target_box = []  # foreground box
         self.dic_name = []
         self.bg_id = []
@@ -31,12 +32,14 @@ class ImageDatasetPlus(Dataset):
             label = int(row[-3])
             image_path = row[-2]
             mask_path = row[-1]
+            scale = eval(row[3])
             target_box = eval(row[2])
             bg_id = eval(row[1])
             fg_id = eval(row[0])
             self.labels.append(label)
             self.images_path.append(os.path.join(opt.img_path, image_path))
             self.mask_path.append(os.path.join(opt.mask_path, mask_path))
+            self.scale.append(scale)
             self.target_box.append(target_box)
             self.bg_id.append(bg_id)
             self.fg_id.append(fg_id)
@@ -66,13 +69,16 @@ class ImageDatasetPlus(Dataset):
         label = self.labels[index]
         target_box = self.target_box[index]
         x1, y1, bw, bh = target_box
-        x2, y2 = x1 + bw, y1 + bh
-        target_box = torch.tensor([x1/w, y1/h, x2/w, y2/h])
+
+        cx = x1 + bw/2
+        cy = y1 + bh/2
+
+        scale = self.scale[index]
 
         bg_id = self.bg_id[index]
         fg_id = self.fg_id[index]
-
-        return img_mask, label, target_box, fg_id, bg_id
+       
+        return img_mask, label, cx, cy, scale, fg_id, bg_id
 
     def __len__(self):
         return len(self.labels)
