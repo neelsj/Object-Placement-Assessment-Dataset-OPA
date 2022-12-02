@@ -4,6 +4,7 @@ import os
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as Ft
 from PIL import Image
 from torch.utils.data import Dataset
 
@@ -11,6 +12,23 @@ from config import opt
 
 torch.random.manual_seed(1)
 
+def aspect_pad(image, w_bg, h_bg):
+
+    w = image.size[0]
+    h = image.size[1]
+    aspect_bg = w_bg/h_bg
+    
+    if (w > h):
+        h = int(float(w)/aspect_bg + .5)
+    else:
+        w = int(float(h)*aspect_bg + .5)
+
+    p_left = (w - image.size[0]) // 2
+    p_top = (h - image.size[1]) // 2
+    p_right = w - p_left - image.size[0]
+    p_bottom = h - p_top - image.size[1]
+    padding = (p_left, p_top, p_right, p_bottom)
+    return Ft.pad(image, padding, 0, 'constant')
 
 class ImageDatasetPlus(Dataset):
     def __init__(self, istrain=True):
@@ -66,19 +84,34 @@ class ImageDatasetPlus(Dataset):
 
         img_mask = torch.cat([img, mask], dim=0)
 
+        bg_id = self.bg_id[index]
+        fg_id = self.fg_id[index]
+
+        background = Image.open("/mnt/e/Research/Images/new_OPA/background_all/%d.jpg" % bg_id)
+        backgroundw = background.size[0]
+        backgroundh = background.size[1]
+        background = self.img_transform(background)  
+
+        foreground = Image.open("/mnt/e/Research/Images/new_OPA/foreground_all/%d.jpg" % fg_id)            
+        foreground = aspect_pad(foreground, backgroundw, backgroundh)
+        foreground = self.img_transform(foreground)
+
+        mask = Image.open("/mnt/e/Research/Images/new_OPA/foreground_all/mask_%d.jpg"% fg_id).convert('L') 
+        mask = aspect_pad(mask, backgroundw, backgroundh)
+        mask = self.img_transform(mask)
+
+        foreground = torch.cat([foreground, mask], dim=0)
+                 
         label = self.labels[index]
         target_box = self.target_box[index]
         x1, y1, bw, bh = target_box
 
-        cx = x1 + bw/2
-        cy = y1 + bh/2
+        cx = (x1 + bw/2)/backgroundw
+        cy = (y1 + bh/2)/backgroundh
 
         scale = self.scale[index]
 
-        bg_id = self.bg_id[index]
-        fg_id = self.fg_id[index]
-       
-        return img_mask, label, cx, cy, scale, fg_id, bg_id
+        return img_mask, label, cx, cy, scale, foreground, background
 
     def __len__(self):
         return len(self.labels)

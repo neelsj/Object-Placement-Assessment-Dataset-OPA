@@ -73,10 +73,11 @@ class ObjectPlaceNetFBMatch(nn.Module):
 
 # classify if the background is a match to the foreground
 class ObjectPlaceNetFBComposite(nn.Module):
-    def __init__(self, backbone_pretrained=True, device = torch.device('cuda:0')):
+    def __init__(self, backbone_pretrained=True, device = torch.device('cuda:0'), include_rotation=False):
         super(ObjectPlaceNetFBComposite, self).__init__()
         
         self.device = device
+        self.include_rotation = include_rotation
 
         ## Backbone, only resnet
         resnet_layers = int(opt.backbone.split('resnet')[-1])
@@ -104,9 +105,9 @@ class ObjectPlaceNetFBComposite(nn.Module):
         self.avgpool3x3 = nn.AdaptiveAvgPool2d(3)
         self.avgpool1x1 = nn.AdaptiveAvgPool2d(1)
 
-        self.prediction_head = nn.Linear(self.global_feature_dim*2, 5, bias=False)
-
-        self.classify = ObjectPlaceNet(backbone_pretrained=False)
+        self.prediction_head = nn.Linear(self.global_feature_dim*2, 5 if self.include_rotation else 4, bias=False)
+        
+        #self.classify = ObjectPlaceNet(backbone_pretrained=False)
 
     def forward(self, img_cat, img_back):
 
@@ -129,23 +130,29 @@ class ObjectPlaceNetFBComposite(nn.Module):
         #print(transform_params.shape)
         #print(transform_params)
 
-        theta = transform_params[:,0]
-        centerx = transform_params[:,1]
-        centery = transform_params[:,2]
-        scale = transform_params[:,3]
+        if (self.include_rotation):            
+            theta = transform_params[:,0]
+            centerx = transform_params[:,1]
+            centery = transform_params[:,2]
+            scale = transform_params[:,3]
+        else:
+            theta = None
+            centerx = transform_params[:,0]
+            centery = transform_params[:,1]
+            scale = transform_params[:,2]
 
-        img_warp = model.affine_warp(img, theta, centerx, centery, scale)
+        img_warp = self.affine_warp(img_cat, theta, centerx, centery, scale)
+        img_comp = self.composite(img_warp, img_back)
 
-        img_comp = model.composite(img_warp, background)
+        #prediction = self.classify(img_comp)
 
-        prediction = self.classify(img_comp)
+        return img_comp
 
-        return prediction, img_comp
-
-    # rotation 0 to 1, centerx, centery 0 to 1, scale 0 to 1
+    # rotation 0 to 1, centerx, centery 0 to 1, scale 0 to inf
     def affine_warp(self, img_cat, theta, centerx, centery, scale):
         
-        theta = theta*2*torch.pi
+        if (theta is not None):
+            theta = theta*2*torch.pi
 
         centerx = centerx*2.-1.
         centery = centery*2.-1.      
@@ -153,15 +160,32 @@ class ObjectPlaceNetFBComposite(nn.Module):
         transx = -centerx
         transy = -centery
 
-        rot = torch.tensor((torch.cos(theta),-torch.sin(theta),0,torch.sin(theta),torch.cos(theta),0,0,0,1)).reshape(3,3).float()
-        trans = torch.tensor((1,0,transx,0,1,transy,0,0,1)).reshape(3,3).float()
-        scale = torch.tensor((1./scale,0,0,0,1./scale,0,0,0,1)).reshape(3,3).float()
+        if (theta and theta.shape[0] == 1):
+            R = torch.tensor((torch.cos(theta),-torch.sin(theta),0,torch.sin(theta),torch.cos(theta),0,0,0,1)).reshape(3,3).float()
 
-        mat = torch.matmul(rot,torch.matmul(scale,trans))
-        mat = mat[0:2,:]
+        Ms = []
+
+        for b in range(img_cat.shape[0]):
+
+            if (theta is not None and theta.shape[0] == img_cat.shape[0]):
+                R = torch.tensor((torch.cos(theta[b]),-torch.sin(theta[b]),0,torch.sin(theta[b]),torch.cos(theta[b]),0,0,0,1)).reshape(3,3).float()
+
+            T = torch.tensor((1,0,transx[b],0,1,transy[b],0,0,1)).reshape(3,3).float()
+            S = torch.tensor((1./scale[b],0,0,0,1./scale[b],0,0,0,1)).reshape(3,3).float()
+
+            if (theta is not None):
+                M = torch.matmul(R,torch.matmul(S,T))
+            else:
+                M = torch.matmul(S,T)
+
+            M = M[0:2,:]
        
-        grid = torch.nn.functional.affine_grid(mat.unsqueeze(0), img_cat.shape).to(self.device)
-        img_cat_warp = torch.nn.functional.grid_sample(img_cat, grid)
+            Ms.append(M)
+
+        Ms = torch.stack(Ms, 0)
+
+        grid = torch.nn.functional.affine_grid(Ms, img_cat.shape, align_corners=True).to(self.device)
+        img_cat_warp = torch.nn.functional.grid_sample(img_cat, grid, align_corners=True)
 
         return img_cat_warp
 
@@ -181,50 +205,6 @@ class ObjectPlaceNetFBComposite(nn.Module):
 
         return img_comp
 
-#if __name__ == '__main__':
-#    with torch.no_grad():
-#        device = torch.device('cuda:0')
-
-        #img_transform = transforms.Compose([
-        #    transforms.Resize((opt.img_size, opt.img_size)),
-        #    transforms.ToTensor()
-        #])
-
-#        img = Image.open("/mnt/e/Research/Images/new_OPA/foreground/airplane/157394.jpg")
-#        img = img_transform(img).unsqueeze(0).to(device)
-    
-#        mask = Image.open("/mnt/e/Research/Images/new_OPA/foreground/airplane/mask_157394.jpg").convert('L') 
-#        mask = img_transform(mask).unsqueeze(0).to(device)  
-
-#        background = Image.open("/mnt/e/Research/Images/new_OPA/background/airplane/15016.jpg")
-#        background = img_transform(background).unsqueeze(0).to(device)  
-
-#        img = torch.cat([img, mask], dim=1)
-    
-#        model = ObjectPlaceNetFBComposite(backbone_pretrained=False, device=device).to(device)
-
-#        checkpoint_path='experiments/ablation_study/resnet18_repeat3/checkpoints/best-acc.pth'
-#        print('load pretrained weights from ', checkpoint_path)
-#        model.classify.load_state_dict(torch.load(checkpoint_path, map_location=device))
-
-#        #theta = torch.tensor(.5)
-#        #centerx = torch.tensor(.75)
-#        #centery = torch.tensor(.75)
-#        #scale = torch.tensor(0.5)
-
-#        #img_warp = model.affine_warp(img, theta, centerx, centery, scale)
-#        #img_comp = model.composite(img_warp, background)
-
-#        prediction, img_comp = model(img, background)
-
-#        prob = F.softmax(prediction)
-
-#        print(prob)
-
-#        plt.figure()
-#        plt.imshow(img_comp[0,0:3,:,:].cpu().permute(1, 2, 0))
-#        plt.show()
-
 def F1(preds, gts):
     tp = sum(list(map(lambda a, b: a == 1 and b == 1, preds, gts)))
     fp = sum(list(map(lambda a, b: a == 1 and b == 0, preds, gts)))
@@ -236,39 +216,15 @@ def F1(preds, gts):
     bal_acc = (tpr + tnr) / 2
     return f1, bal_acc
 
-class SquarePad:
-    def __call__(self, image):
-        max_wh = max(image.size)
-        p_left, p_top = [(max_wh - s) // 2 for s in image.size]
-        p_right, p_bottom = [max_wh - (s+pad) for s, pad in zip(image.size, [p_left, p_top])]
-        padding = (p_left, p_top, p_right, p_bottom)
-        return Ft.pad(image, padding, 0, 'constant')
-
-def aspect_pad(image, w_bg, h_bg):
-
-    w = image.size[0]
-    h = image.size[1]
-    aspect_bg = w_bg/h_bg
-    
-    if (w > h):
-        h = int(float(w)/aspect_bg + .5)
-    else:
-        w = int(float(h)*aspect_bg + .5)
-
-    p_left = (w - image.size[0]) // 2
-    p_top = (h - image.size[1]) // 2
-    p_right = w - p_left - image.size[0]
-    p_bottom = h - p_top - image.size[1]
-    padding = (p_left, p_top, p_right, p_bottom)
-    return Ft.pad(image, padding, 0, 'constant')
-
 def evaluate_model(device, checkpoint_path='./best-acc.pth'):
-    #opt.without_mask = False
-    #assert os.path.exists(checkpoint_path), checkpoint_path
-    #net = ObjectPlaceNet(backbone_pretrained=False)
-    #print('load pretrained weights from ', checkpoint_path)
-    #net.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    #net = net.to(device).eval()
+    opt.without_mask = False
+    assert os.path.exists(checkpoint_path), checkpoint_path
+    net = ObjectPlaceNet(backbone_pretrained=False)
+    print('load pretrained weights from ', checkpoint_path)
+    net.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    net = net.to(device).eval()
+
+    use_comp = True
 
     modelComp = ObjectPlaceNetFBComposite(backbone_pretrained=False, device=device).to(device).eval()
 
@@ -284,73 +240,28 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
     ])
 
     with torch.no_grad():
-        for batch_index, (img_cat, label, cx, cy, scale, fg_id, bg_id) in enumerate(tqdm(test_loader)):
-            img_cat, label, cx, cy, scale = img_cat.to(
-                device), label.to(device), cx.to(device), cy.to(device), scale.to(device)
-
-            img_cat = img_cat[0:1,:,:,:]
-            #print(img_cat.shape)
-
-            background = Image.open("/mnt/e/Research/Images/new_OPA/background_all/%d.jpg" % bg_id[0])
-           
-            #plt.figure()
-            #plt.imshow(background)
-
-            img = Image.open("/mnt/e/Research/Images/new_OPA/foreground_all/%d.jpg" % fg_id[0])
-
-            #print(img.size)
-            #print(background.size)
+        for batch_index, (img_cat, label, cx, cy, scale, foreground, background) in enumerate(tqdm(test_loader)):
+            img_cat, label, cx, cy, scale, foreground, background = img_cat.to(device), label.to(device), cx.to(device), cy.to(device), scale.to(device), foreground.to(device), background.to(device)
+                       
+            if (use_comp):
+                theta = torch.tensor(0.)
+                foreground_warp = modelComp.affine_warp(foreground, theta, cx, cy, scale)
+                img_comp = modelComp.composite(foreground_warp, background)           
             
-            bw = background.size[0]
-            bh = background.size[1]
+                #img_comp = modelComp(foreground, background)        
 
-            img = aspect_pad(img, background.size[0], background.size[1])
-            #print(img.size)            
+                #for b in range(img_cat.shape[0]):
+                #    plt.figure()
+                #    plt.imshow(img_cat[b,0:3,:,:].cpu().permute(1, 2, 0))
 
-            mask = Image.open("/mnt/e/Research/Images/new_OPA/foreground_all/mask_%d.jpg"% fg_id[0]).convert('L') 
-            mask = aspect_pad(mask, background.size[0], background.size[1])
-            
-            img = img_transform(img).unsqueeze(0).to(device)
-            mask = img_transform(mask).unsqueeze(0).to(device)  
-            background = img_transform(background).unsqueeze(0).to(device)  
+                #    plt.figure()
+                #    plt.imshow(img_comp[b,0:3,:,:].cpu().permute(1, 2, 0))
 
-            #print(img.shape)
-            #print(mask.shape)
-            #print(background.shape)
+                #    plt.show()
 
-            #plt.figure()
-            #plt.imshow(img[0,0:3,:,:].cpu().permute(1, 2, 0))
-
-            #plt.figure()
-            #plt.imshow(mask[0,0:3,:,:].cpu().permute(1, 2, 0))
-
-            #plt.figure()
-            #plt.imshow(background[0,0:3,:,:].cpu().permute(1, 2, 0))
-
-            #plt.show()
-
-            img = torch.cat([img, mask], dim=1)
-           
-            theta = torch.tensor(0.)
-
-            centerx = cx[0]/bw
-            centery = cy[0]/bh
-            scale = scale[0]
-
-            img_warp = modelComp.affine_warp(img, theta, centerx, centery, scale)
-            img_comp = modelComp.composite(img_warp, background)           
-
-            img_cat = (img_cat + img_comp)/2
-
-            plt.figure()
-            plt.imshow(img_cat[0,0:3,:,:].cpu().permute(1, 2, 0))
-
-            plt.figure()
-            plt.imshow(img_comp[0,0:3,:,:].cpu().permute(1, 2, 0))
-
-            plt.show()
-
-            logits = net(img_cat)
+                logits = net(img_comp)
+            else:
+                logits = net(img_cat)
 
             pred_labels.extend(logits.max(1)[1].cpu().numpy())
             gts.extend(label.cpu().numpy())
@@ -364,6 +275,9 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
 
 
 if __name__ == '__main__':
+
+    opt.batch_size = 16
+
     device = "cuda:0"
     f1, balanced_acc = evaluate_model(device, checkpoint_path='experiments/ablation_study/resnet18_repeat3/checkpoints/best-acc.pth')
 
