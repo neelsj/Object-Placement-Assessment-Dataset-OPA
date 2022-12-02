@@ -107,7 +107,7 @@ class ObjectPlaceNetFBComposite(nn.Module):
 
         self.prediction_head = nn.Linear(self.global_feature_dim*2, 5 if self.include_rotation else 4, bias=False)
         
-        #self.classify = ObjectPlaceNet(backbone_pretrained=False)
+        self.classify = ObjectPlaceNet(backbone_pretrained=False)
 
     def forward(self, img_cat, img_back):
 
@@ -144,9 +144,12 @@ class ObjectPlaceNetFBComposite(nn.Module):
         img_warp = self.affine_warp(img_cat, theta, centerx, centery, scale)
         img_comp = self.composite(img_warp, img_back)
 
-        #prediction = self.classify(img_comp)
+        logits = self.classify(img_comp)
 
-        return img_comp
+        probs = F.softmax(logits)
+        probs_fake = probs[:,0]
+
+        return logits, probs_fake, img_comp
 
     # rotation 0 to 1, centerx, centery 0 to 1, scale 0 to inf
     def affine_warp(self, img_cat, theta, centerx, centery, scale):
@@ -220,14 +223,19 @@ def F1(preds, gts):
 def evaluate_model(device, checkpoint_path='./best-acc.pth'):
     opt.without_mask = False
     assert os.path.exists(checkpoint_path), checkpoint_path
-    net = ObjectPlaceNet(backbone_pretrained=False)
-    print('load pretrained weights from ', checkpoint_path)
-    net.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    net = net.to(device).eval()
 
     use_comp = True
 
     modelComp = ObjectPlaceNetFBComposite(backbone_pretrained=False, device=device).to(device).eval()
+
+    print('load pretrained weights from ', checkpoint_path)
+    modelComp.classify.load_state_dict(torch.load(checkpoint_path, map_location=device))
+
+    if (not use_comp):
+        net = ObjectPlaceNet(backbone_pretrained=False)
+        print('load pretrained weights from ', checkpoint_path)
+        net.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        net = net.to(device).eval()
 
     total = 0
     pred_labels = []
@@ -248,10 +256,13 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
                        
             if (use_comp):
                 theta = torch.tensor(0.)
-                foreground_warp = modelComp.affine_warp(foreground, theta, cx, cy, scale)
-                img_comp = modelComp.composite(foreground_warp, background)           
-            
-                #img_comp = modelComp(foreground, background)        
+                #foreground_warp = modelComp.affine_warp(foreground, theta, cx, cy, scale)
+                #img_comp = modelComp.composite(foreground_warp, background)           
+                #logits = net(img_comp)
+                #probs = F.softmax(logits)
+                #probs_fake = probs[:,0]
+
+                logits, probs_fake, img_comp = modelComp(foreground, background)        
 
                 #for b in range(img_cat.shape[0]):
                 #    plt.figure()
@@ -262,24 +273,16 @@ def evaluate_model(device, checkpoint_path='./best-acc.pth'):
 
                 #    plt.show()
 
-                logits = net(img_comp)
             else:
                 logits = net(img_cat)
 
-            probs = F.softmax(logits)
-            probs_fake = probs[:,0]
-
-            print(F.softmax(logits))
-            print(logits.max(1)[1].cpu().numpy())
-            print(label.cpu().numpy())
+                probs = F.softmax(logits)
+                probs_fake = probs[:,0]
 
             pred_labels.extend(logits.max(1)[1].cpu().numpy())
             gts.extend(label.cpu().numpy())
             pred_fake.extend(probs_fake.cpu().numpy())
             total += label.size(0)
-
-            break
-
 
     total_f1, total_bal_acc = F1(pred_labels, gts)
     print("Baseline model evaluate on {} images, local:f1={:.4f},bal_acc={:.4f},loss={:.4f}".format(
